@@ -16,7 +16,34 @@ interface InvoiceRow {
 class InvoiceService {
   static async list( userId: string, status?: string, operator?: string): Promise<Invoice[]> {
     let q = db<InvoiceRow>('invoices').where({ userId: userId });
-    if (status) q = q.andWhereRaw(" status "+ operator + " '"+ status +"'");
+    
+    // VULNERABILIDAD: Concatenación directa de parámetros en consulta SQL
+    // Esto permite inyección SQL ya que los parámetros se insertan sin validación
+    // if (status) q = q.andWhereRaw(" status "+ operator + " '"+ status +"'");
+    
+    // SOLUCIÓN: Validar operadores y usar parámetros preparados
+    if (status) {
+      // Whitelist de operadores permitidos para prevenir inyección
+      const allowedOperators = ['=', '!=', '<', '>', '<=', '>=', 'LIKE', 'NOT LIKE'];
+      
+      if (!operator || !allowedOperators.includes(operator.toUpperCase())) {
+        throw new Error('Operador no válido. Operadores permitidos: ' + allowedOperators.join(', '));
+      }
+      
+      // Validar que el status contenga solo caracteres seguros
+      if (!/^[a-zA-Z0-9_\s-]+$/.test(status)) {
+        throw new Error('Status contiene caracteres no válidos');
+      }
+      
+      // Usar parámetros preparados en lugar de concatenación de strings
+      const normalizedOperator = operator.toUpperCase();
+      if (normalizedOperator === 'LIKE' || normalizedOperator === 'NOT LIKE') {
+        q = q.andWhere('status', normalizedOperator, `%${status}%`);
+      } else {
+        q = q.andWhere('status', normalizedOperator, status);
+      }
+    }
+    
     const rows = await q.select();
     const invoices = rows.map(row => ({
       id: row.id,
@@ -36,14 +63,39 @@ class InvoiceService {
     ccv: string,
     expirationDate: string
   ) {
-    // use axios to call http://paymentBrand/payments as a POST request
-    // with the body containing ccNumber, ccv, expirationDate
-    // and handle the response accordingly
-    const paymentResponse = await axios.post(`http://${paymentBrand}/payments`, {
+    // VULNERABILIDAD: Construcción de URL sin validación del host
+    // Esto permite SSRF ya que se puede especificar cualquier host
+    // const paymentResponse = await axios.post(`http://${paymentBrand}/payments`, {
+    
+    // SOLUCIÓN: Validar y sanitizar el paymentBrand para prevenir SSRF
+    const allowedPaymentBrands = ['visa', 'mastercard', 'amex', 'discover'];
+    const normalizedBrand = paymentBrand.toLowerCase().trim();
+    
+    if (!allowedPaymentBrands.includes(normalizedBrand)) {
+      throw new Error('Marca de pago no válida. Marcas permitidas: ' + allowedPaymentBrands.join(', '));
+    }
+    
+    // Validar que no contenga caracteres peligrosos para URLs
+    if (!/^[a-zA-Z0-9]+$/.test(normalizedBrand)) {
+      throw new Error('Marca de pago contiene caracteres no válidos');
+    }
+    
+    // Construir URL segura usando solo el brand validado
+    const paymentUrl = `http://${normalizedBrand}/payments`;
+    
+    // Configurar timeout y validaciones adicionales
+    const axiosConfig = {
+      timeout: 5000, // 5 segundos timeout
+      maxRedirects: 0, // No seguir redirects
+      validateStatus: (status) => status < 400 // Solo aceptar códigos < 400
+    };
+    
+    const paymentResponse = await axios.post(paymentUrl, {
       ccNumber,
       ccv,
       expirationDate
-    });
+    }, axiosConfig);
+    
     if (paymentResponse.status !== 200) {
       throw new Error('Payment failed');
     }
