@@ -6,6 +6,9 @@ import { promisify } from 'util';
 
 const unlink = promisify(fs.unlink);
 
+// Directorio seguro para archivos de historiales clínicos
+const CLINICAL_FILES_DIR = path.resolve(process.env.CLINICAL_UPLOAD_PATH || './uploads/clinical');
+
 interface CHRow {
   id: string;
   user_id: string;
@@ -130,7 +133,16 @@ class ClinicalHistoryService {
       .first();
     if (!f) throw new Error('File not found');
 
-    try { await unlink(path.resolve(f.path)); } catch {}
+    //Validar que el archivo esté en el directorio permitido
+    const fileName = path.basename(f.path); 
+    const safePath = path.resolve(CLINICAL_FILES_DIR, fileName);
+    
+    //verificar que la ruta final está dentro del directorio permitido
+    if (!safePath.startsWith(CLINICAL_FILES_DIR)) {
+      throw new Error('Invalid file path');
+    }
+
+    try { await unlink(safePath); } catch {}
     await db('clinical_history_files').where({ id: f.id }).delete();
   }
 }

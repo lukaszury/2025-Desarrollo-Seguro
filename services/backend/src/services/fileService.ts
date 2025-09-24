@@ -6,6 +6,9 @@ import db from '../db';
 
 const unlink = promisify(fs.unlink);
 
+// Implementar un directorio seguro para almacenar fotos de perfil
+const PROFILE_PICTURES_DIR = path.resolve(process.env.UPLOAD_PATH || './uploads/profiles');
+
 class FileService {
   static async saveProfilePicture(
     userId: string,
@@ -34,10 +37,23 @@ class FileService {
       .where({ id: userId })
       .first();
     if (!user || !user.picture_path) throw new Error('No profile picture');
+    
+    // En vez de tomar el path como viene, validar que el archivo esté en el directorio permitido que definimos antes
+    const fileName = path.basename(user.picture_path); // TOmar solamente el nombre del archivo
+    const safePath = path.resolve(PROFILE_PICTURES_DIR, fileName); // Con esto se construye una ruta segura
+    
+    // Verificar que la ruta final está dentro del directorio permitido
+    if (!safePath.startsWith(PROFILE_PICTURES_DIR)) {
+      throw new Error('Invalid file path');
+    }
+    
+    // Verificar que el archivo existe
+    if (!fs.existsSync(safePath)) {
+      throw new Error('Profile picture file not found');
+    }
 
-    const filePath = user.picture_path;
-    const stream   = fs.createReadStream(filePath);
-    const ext      = path.extname(filePath).toLowerCase();
+    const stream   = fs.createReadStream(safePath);
+    const ext      = path.extname(safePath).toLowerCase();
     const contentType =
       ext === '.png'  ? 'image/png'  :
       ext === '.jpg'  ? 'image/jpeg' :
@@ -54,7 +70,16 @@ class FileService {
       .first();
     if (!user || !user.picture_path) throw new Error('No profile picture');
 
-    try { await unlink(path.resolve(user.picture_path)); } catch { /*ignore*/ }
+    // Igual que antes, validar que el archivo esté en el directorio permitido
+    const fileName = path.basename(user.picture_path);
+    const safePath = path.resolve(PROFILE_PICTURES_DIR, fileName);
+    
+    // Verificar que la ruta final está dentro del directorio permitido
+    if (!safePath.startsWith(PROFILE_PICTURES_DIR)) {
+      throw new Error('Invalid file path');
+    }
+
+    try { await unlink(safePath); } catch { /*ignore*/ } // Usar ruta segura
 
     await db('users')
       .update({ picture_path: null })
