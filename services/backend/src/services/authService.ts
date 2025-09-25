@@ -1,6 +1,7 @@
 
 import crypto from 'crypto';
 import nodemailer from 'nodemailer';
+import bcrypt from 'bcryptjs';
 import db from '../db';
 import { User,UserRow } from '../types/user';
 import jwtUtils from '../utils/jwt';
@@ -12,25 +13,32 @@ const INVITE_TTL = 1000 * 60 * 60 * 24 * 7; // 7d
 class AuthService {
 
   static async createUser(user: User) {
-    const existing = await db<UserRow>('users')
-      .where({ username: user.username })
-      .orWhere({ email: user.email })
-      .first();
-    if (existing) throw new Error('User already exists with that username or email');
+    const nameRegex = /^[\p{L}\p{M}.'\- ]{1,50}$/u;
+    if (!nameRegex.test(user.first_name) || !nameRegex.test(user.last_name)) throw new Error('Invalid name');
+
+    const existing = await db<UserRow>('users').where({ username: user.username }).orWhere({ email: user.email }).first();
+    if (existing) throw new Error('User already exists');
+
+    //La password esta sin hashear
+    const passwordHash = await bcrypt.hash(user.password, 12);
+    
     // create invite token
-    const invite_token = crypto.randomBytes(6).toString('hex');
-    const invite_token_expires = new Date(Date.now() + INVITE_TTL);
-    await db<UserRow>('users')
-      .insert({
-        username: user.username,
-        password: user.password,
-        email: user.email,
-        first_name: user.first_name,
-        last_name:  user.last_name,
-        invite_token,
-        invite_token_expires,
-        activated: false
-      });
+    // token raw + hash
+    const rawInvite = crypto.randomBytes(16).toString('hex');
+    const inviteTokenHash = crypto.createHash('sha256').update(rawInvite).digest('hex');
+    const inviteExpires = new Date(Date.now() + INVITE_TTL);
+
+    //La password y el token se pasa hasheado
+    await db<UserRow>('users').insert({
+      username: user.username,
+      password: passwordHash,
+      email: user.email,
+      first_name: user.first_name,
+      last_name: user.last_name,
+      invite_token: inviteTokenHash,
+      invite_token_expires: inviteExpires,
+      activated: false
+    });
       // send invite email using nodemailer and local SMTP server
     const transporter = nodemailer.createTransport({
       host: process.env.SMTP_HOST,
@@ -40,23 +48,42 @@ class AuthService {
         pass: process.env.SMTP_PASS
       }
     });
-    const link = `${process.env.FRONTEND_URL}/activate-user?token=${invite_token}&username=${user.username}`;
-   
-    const template = `
+
+    const link = `${process.env.FRONTEND_URL}/activate-user?token=${encodeURIComponent(rawInvite)}&username=${encodeURIComponent(user.username)}`;
+    
+    //Plantilla inline fija sin usar interpolacion
+    const INVITE_TEMPLATE = `
+      <!doctype html>
       <html>
         <body>
-          <h1>Hello ${user.first_name} ${user.last_name}</h1>
-          <p>Click <a href="${ link }">here</a> to activate your account.</p>
+          <h1>Hello <%= first_name %> <%= last_name %></h1>
+          <p>Click <a href="<%= link %>">here</a> to activate your account.</p>
         </body>
-      </html>`;
-    const htmlBody = ejs.render(template);
-    
-    await transporter.sendMail({
-      from: "info@example.com",
-      to: user.email,
-      subject: 'Activate your account',
-      html: htmlBody
+      </html>
+    `;
+
+    const firstName = user.first_name;
+    const lastName  = user.last_name; 
+
+    //Usar plantilla segura sin evaluación dinámica de código (ya no se usa directo de lo que trae user)
+    const htmlBody = ejs.render(INVITE_TEMPLATE, {
+      first_name: firstName,
+      last_name: lastName,
+      link
     });
+    
+    try {
+      await transporter.sendMail({
+        from: "info@example.com",
+        to: user.email,
+        subject: 'Activate your account',
+        html: htmlBody
+      });
+    } catch (err) {
+      console.error('sendMail error', err);
+      throw new Error('Unable to send invite email');
+    }
+    
   }
 
   static async updateUser(user: User) {
