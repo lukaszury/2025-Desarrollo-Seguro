@@ -105,26 +105,53 @@ class InvoiceService {
       .where({ id: invoiceId, userId })
       .update({ status: 'paid' });  
     };
-  static async  getInvoice( invoiceId:string): Promise<Invoice> {
-    const invoice = await db<InvoiceRow>('invoices').where({ id: invoiceId }).first();
+
+  //static async  getInvoice( invoiceId:string): Promise<Invoice> {
+  static async  getInvoice(userId: string, invoiceId: string): Promise<Invoice> {
+    //MITIGACIÓN: Validar que la factura pertenece al usuario autenticado
+    //const invoice = await db<InvoiceRow>('invoices').where({ id: invoiceId }).first();
+    const invoice = await db<InvoiceRow>('invoices')
+      .where({ id: invoiceId, userId: userId })  // Agregar validación de userId
+      .first();
     if (!invoice) {
-      throw new Error('Invoice not found');
+      throw new Error('Invoice not found or access denied');
     }
     return invoice as Invoice;
   }
-
+  
+    
 
   static async getReceipt(
+    userId: string,
     invoiceId: string,
     pdfName: string
   ) {
-    // check if the invoice exists
+    /* // check if the invoice exists
     const invoice = await db<InvoiceRow>('invoices').where({ id: invoiceId }).first();
     if (!invoice) {
       throw new Error('Invoice not found');
+    } */
+
+    //MITIGACION: Verificar que la factura pertenece al usuario autenticado
+    const invoice = await db<InvoiceRow>('invoices')
+      .where({ id: invoiceId, userId: userId })  // Validar propiedad de la factura
+      .first();
+    if (!invoice) {
+      throw new Error('Invoice not found or access denied');
     }
+
     try {
-      const filePath = `/invoices/${pdfName}`;
+      //const filePath = `/invoices/${pdfName}`; //Esto tambien ouede generar path traversal porque se esta tomando una ruta directo de la bd
+      //MITIGACIÓN: Sanitizar el nombre del archivo para prevenir path traversal
+      const sanitizedPdfName = path.basename(pdfName);  //Solo el nombre, sin rutas
+      const filePath = path.resolve('/invoices', sanitizedPdfName);  // Construcción segura de ruta
+      
+      //MITIGACIÓN: Verificar que la ruta está dentro del directorio permitido
+      const allowedDir = path.resolve('/invoices');
+      if (!filePath.startsWith(allowedDir)) {
+        throw new Error('Invalid file path');
+      }
+
       const content = await fs.readFile(filePath, 'utf-8');
       return content;
     } catch (error) {

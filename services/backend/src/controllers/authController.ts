@@ -70,11 +70,22 @@ const createUser = async (req: Request, res: Response, next: NextFunction) => {
     next(err);
   }
 };
-
+//MITIGACION: EL problema con este metodo es que nunca verifica que el usuario
+// a modificar sea el mismo que lo solicita. Podria ocurrir que un usuario modifique
+//los datos de otro. La solucion es chequear que el usuario a modificar coincida
+//con el que realiza la solicitud
 const updateUser = async (req: Request, res: Response, next: NextFunction) => {
-  const userId = req.params.id;
+  //const userId = req.params.id;
+  const targetUserId = req.params.id; //ID del usuario a modificar
+  const currentUserId = (req as any).user?.id; //MITIGACION: ID del usuario autenticado
   const { username, password, email, first_name, last_name } = req.body;
   try {
+    //MITIGACION: Verificar que coincidan los ID de usuario
+    if (targetUserId !== currentUserId) {
+      return res.status(403).json({
+        error: 'Access denied: Solo puede modificar su propia cuenta.'
+      })
+    }
   const user: User = {
       username,
       password,
